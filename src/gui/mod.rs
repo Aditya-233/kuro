@@ -7,8 +7,8 @@ use crate::models::{AnimeShow, DownloadStatus, DownloadTask, Episode, LocalVideo
 use crate::player::PlaybackSession;
 use crate::sources::AnimeSourceClient;
 use iced::widget::{
-    button, center, column, container, mouse_area, opaque, row, scrollable, space, stack, text,
-    text_input,
+    button, center, column, container, image, mouse_area, opaque, row, scrollable, space, stack,
+    text, text_input,
 };
 use iced::{Alignment, Background, Color, Element, Fill, Length, Task, Theme};
 use std::path::PathBuf;
@@ -71,6 +71,14 @@ pub enum Message {
     PlayEpisode(PathBuf),
     /// Toggle play / pause during playback.
     TogglePlayback,
+    /// Seek relative in seconds (+/- seconds).
+    SeekRelative(f64),
+    /// Native frame extracted from video file.
+    FrameExtracted(Result<Vec<u8>, String>),
+    /// Periodic tick for playback.
+    PlayerTick,
+    /// Launch external native Wayland player via MPV.
+    LaunchNativePopout,
     /// Dismiss the playback overlay.
     ClosePlayer,
 }
@@ -117,10 +125,20 @@ impl App {
         self.local_files = crate::sources::scan_local_downloads(&dl_dir);
     }
 
-    /// Create an instance with an optional initial search query and task.
-    pub fn with_initial_query(query: Option<String>, select_first: bool) -> (Self, Task<Message>) {
+    /// Create an instance with optional initial search query, auto-select, or immediate play file.
+    pub fn with_initial_options(
+        query: Option<String>,
+        select_first: bool,
+        play: Option<PathBuf>,
+    ) -> (Self, Task<Message>) {
         let mut app = Self::new();
         app.auto_select_first = select_first;
+
+        if let Some(path) = play {
+            let task = app.update(Message::PlayEpisode(path));
+            return (app, task);
+        }
+
         if let Some(q) = query {
             let _ = app.update(Message::SearchInputChanged(q));
             let task = app.update(Message::SearchSubmitted);
@@ -128,6 +146,11 @@ impl App {
         } else {
             (app, Task::none())
         }
+    }
+
+    /// Backwards compatible wrapper for `with_initial_query`.
+    pub fn with_initial_query(query: Option<String>, select_first: bool) -> (Self, Task<Message>) {
+        Self::with_initial_options(query, select_first, None)
     }
 
     /// Theme specification using T3-Code aesthetic palette.
@@ -140,6 +163,17 @@ impl App {
     #[must_use]
     pub fn scale_factor(&self) -> f32 {
         2.0
+    }
+
+    /// Background event subscriptions (e.g. playback ticking).
+    pub fn subscription(&self) -> iced::Subscription<Message> {
+        if let Some(session) = &self.playback_session {
+            if session.is_playing() {
+                return iced::time::every(std::time::Duration::from_millis(1500))
+                    .map(|_| Message::PlayerTick);
+            }
+        }
+        iced::Subscription::none()
     }
 
     /// Elm Architecture update cycle.
@@ -288,14 +322,93 @@ impl App {
                 Task::none()
             }
             Message::PlayEpisode(path) => {
-                let session = PlaybackSession::new(path.clone(), 1440.0);
-                let _ = session.launch_external();
+                let mut session = PlaybackSession::new(path.clone(), 0.0);
+                session.play();
                 self.playback_session = Some(session);
-                Task::none()
+                let p = path;
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            PlaybackSession::extract_frame(&p, 0.0).map_err(|e| e.to_string())
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?
+                    },
+                    Message::FrameExtracted,
+                )
             }
             Message::TogglePlayback => {
                 if let Some(session) = &mut self.playback_session {
                     session.toggle();
+                    if session.is_playing() && session.current_frame().is_none() {
+                        let path = session.file_path().to_path_buf();
+                        let pos = session.position_seconds();
+                        return Task::perform(
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    PlaybackSession::extract_frame(&path, pos)
+                                        .map_err(|e| e.to_string())
+                                })
+                                .await
+                                .map_err(|e| e.to_string())?
+                            },
+                            Message::FrameExtracted,
+                        );
+                    }
+                }
+                Task::none()
+            }
+            Message::SeekRelative(delta) => {
+                if let Some(session) = &mut self.playback_session {
+                    session.seek_by(delta);
+                    let path = session.file_path().to_path_buf();
+                    let pos = session.position_seconds();
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                PlaybackSession::extract_frame(&path, pos)
+                                    .map_err(|e| e.to_string())
+                            })
+                            .await
+                            .map_err(|e| e.to_string())?
+                        },
+                        Message::FrameExtracted,
+                    );
+                }
+                Task::none()
+            }
+            Message::FrameExtracted(result) => {
+                if let Ok(frame) = result {
+                    if let Some(session) = &mut self.playback_session {
+                        session.set_frame(frame);
+                    }
+                }
+                Task::none()
+            }
+            Message::PlayerTick => {
+                if let Some(session) = &mut self.playback_session {
+                    if session.is_playing() {
+                        session.seek_by(1.5);
+                        let path = session.file_path().to_path_buf();
+                        let pos = session.position_seconds();
+                        return Task::perform(
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    PlaybackSession::extract_frame(&path, pos)
+                                        .map_err(|e| e.to_string())
+                                })
+                                .await
+                                .map_err(|e| e.to_string())?
+                            },
+                            Message::FrameExtracted,
+                        );
+                    }
+                }
+                Task::none()
+            }
+            Message::LaunchNativePopout => {
+                if let Some(session) = &self.playback_session {
+                    let _ = session.launch_native_player();
                 }
                 Task::none()
             }
@@ -650,63 +763,110 @@ impl App {
             .into()
         } else if let Some(player) = &self.playback_session {
             // In-App Player Overlay
+            let file_title = player
+                .file_path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Playing Video");
+
+            let video_viewport: Element<Message> = if let Some(frame) = player.current_frame() {
+                container(
+                    image(iced::widget::image::Handle::from_bytes(frame.to_vec()))
+                        .width(Fill)
+                        .height(Fill),
+                )
+                .width(Fill)
+                .height(400)
+                .center_x(Fill)
+                .center_y(Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(Color::BLACK)),
+                    border: iced::Border {
+                        radius: 8.0.into(),
+                        width: 1.0,
+                        color: theme::BORDER,
+                    },
+                    ..Default::default()
+                })
+                .into()
+            } else {
+                container(center(
+                    column![
+                        text("▶ Loading In-App Frame Stream...")
+                            .size(14)
+                            .color(theme::TEXT_MUTED),
+                        text("Native zero-dependency video decoder")
+                            .size(11)
+                            .color(theme::TEXT_MUTED),
+                    ]
+                    .spacing(8)
+                    .align_x(Alignment::Center),
+                ))
+                .width(Fill)
+                .height(400)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(Color::BLACK)),
+                    border: iced::Border {
+                        radius: 8.0.into(),
+                        width: 1.0,
+                        color: theme::BORDER,
+                    },
+                    ..Default::default()
+                })
+                .into()
+            };
+
             let player_box = container(
                 column![
                     row![
-                        text(format!("Now Playing: {}", player.file_path().display()))
-                            .size(16)
-                            .color(theme::TEXT_PRIMARY),
+                        text(format!("▶ Now Playing: {file_title}"))
+                            .size(15)
+                            .color(theme::TEXT_PRIMARY)
+                            .width(Length::FillPortion(1)),
                         space::horizontal(),
                         button(text("✕ Close").size(12).color(theme::TEXT_PRIMARY))
                             .on_press(Message::ClosePlayer)
-                            .padding([4, 12])
+                            .padding([6, 16])
                             .style(|_, s| theme::button_secondary_style(s)),
                     ]
                     .align_y(Alignment::Center),
-                    container(center(
-                        text("▶ In-App Direct Stream Active (wgpu engine)")
-                            .size(15)
-                            .color(theme::TEXT_MUTED)
-                    ))
-                    .width(Fill)
-                    .height(380)
-                    .style(|_| container::Style {
-                        background: Some(Background::Color(Color::BLACK)),
-                        border: iced::Border {
-                            radius: 8.0.into(),
-                            width: 1.0,
-                            color: theme::BORDER,
-                        },
-                        ..Default::default()
-                    }),
+                    video_viewport,
                     row![
                         button(
-                            text(if player.is_playing() { "Pause" } else { "Play" })
-                                .size(13)
-                                .color(theme::TEXT_PRIMARY)
+                            text(if player.is_playing() {
+                                "❚❚ Pause"
+                            } else {
+                                "▶ Play"
+                            })
+                            .size(12)
+                            .color(theme::TEXT_PRIMARY)
                         )
                         .on_press(Message::TogglePlayback)
                         .padding([6, 16])
                         .style(|_, s| theme::button_primary_style(s)),
+                        button(text("⏪ -10s").size(12).color(theme::TEXT_PRIMARY))
+                            .on_press(Message::SeekRelative(-10.0))
+                            .padding([6, 12])
+                            .style(|_, s| theme::button_secondary_style(s)),
+                        button(text("⏩ +10s").size(12).color(theme::TEXT_PRIMARY))
+                            .on_press(Message::SeekRelative(10.0))
+                            .padding([6, 12])
+                            .style(|_, s| theme::button_secondary_style(s)),
                         text(player.formatted_time())
                             .size(13)
                             .color(theme::TEXT_PRIMARY),
                         space::horizontal(),
-                        button(
-                            text("Open in External Player")
-                                .size(12)
-                                .color(theme::TEXT_PRIMARY)
-                        )
-                        .on_press(Message::PlayEpisode(player.file_path().to_path_buf()))
-                        .padding([6, 14])
-                        .style(|_, s| theme::button_secondary_style(s)),
+                        button(text("⛶ Popout Player").size(12).color(theme::ACCENT_BLUE))
+                            .on_press(Message::LaunchNativePopout)
+                            .padding([6, 14])
+                            .style(|_, s| theme::button_secondary_style(s)),
                     ]
-                    .spacing(16)
+                    .spacing(12)
                     .align_y(Alignment::Center),
                 ]
                 .spacing(16),
             )
-            .width(800)
+            .width(860)
             .padding(24)
             .style(|_| container::Style {
                 background: Some(Background::Color(theme::SURFACE)),

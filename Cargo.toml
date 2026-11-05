@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # GUI Runtime
-iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "wayland", "tokio"] }
+iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "wayland", "tokio", "image"] }
 
 # Async & Networking (Pure Rust TLS - zero C OpenSSL dependency)
 tokio = { version = "1.43", features = ["rt-multi-thread", "rt", "sync", "macros", "time", "io-util", "fs"] }

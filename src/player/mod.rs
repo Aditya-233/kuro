@@ -72,19 +72,27 @@ pub struct PlaybackSession {
     is_playing: bool,
     volume: f32,
     speed: f32,
+    current_frame: Option<Vec<u8>>,
 }
 
 impl PlaybackSession {
     /// Create a new playback session for a file.
     #[must_use]
     pub fn new(file_path: PathBuf, duration_seconds: f64) -> Self {
+        let actual_duration = if duration_seconds > 0.0 {
+            duration_seconds
+        } else {
+            Self::probe_duration(&file_path)
+        };
+
         Self {
             file_path,
             position_seconds: 0.0,
-            duration_seconds: duration_seconds.max(0.0),
+            duration_seconds: actual_duration.max(1.0),
             is_playing: false,
             volume: 1.0,
             speed: 1.0,
+            current_frame: None,
         }
     }
 
@@ -122,6 +130,17 @@ impl PlaybackSession {
     #[must_use]
     pub const fn duration_seconds(&self) -> f64 {
         self.duration_seconds
+    }
+
+    /// Current in-memory frame image bytes (JPEG / PNG).
+    #[must_use]
+    pub fn current_frame(&self) -> Option<&[u8]> {
+        self.current_frame.as_deref()
+    }
+
+    /// Set decoded frame data.
+    pub fn set_frame(&mut self, frame: Vec<u8>) {
+        self.current_frame = Some(frame);
     }
 
     /// Start playback.
@@ -169,15 +188,99 @@ impl PlaybackSession {
         )
     }
 
-    /// Launch using system default player via `xdg-open` fallback.
+    /// Probe duration in seconds using ffprobe if available.
+    #[must_use]
+    pub fn probe_duration(path: &Path) -> f64 {
+        let output = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        if let Ok(out) = output {
+            if out.status.success() {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    if let Ok(val) = s.trim().parse::<f64>() {
+                        return val;
+                    }
+                }
+            }
+        }
+
+        1440.0
+    }
+
+    /// Extract a single frame at the given timestamp using native `FFmpeg`.
+    ///
+    /// # Errors
+    /// Returns `PlayerError` if `FFmpeg` fails or outputs zero bytes.
+    pub fn extract_frame(path: &Path, position_seconds: f64) -> Result<Vec<u8>, PlayerError> {
+        let pos_str = format_time_hms(position_seconds);
+        let path_str = path.to_string_lossy().to_string();
+
+        let output = std::process::Command::new("ffmpeg")
+            .args([
+                "-ss",
+                &pos_str,
+                "-i",
+                &path_str,
+                "-vf",
+                "scale=720:-1",
+                "-vframes",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "-q:v",
+                "3",
+                "-",
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()?;
+
+        if output.status.success() && !output.stdout.is_empty() {
+            Ok(output.stdout)
+        } else {
+            Err(PlayerError::UnrecognizedContainer)
+        }
+    }
+
+    /// Launch full native Wayland player via self-contained MPV bundle.
+    ///
+    /// # Errors
+    /// Returns `PlayerError::Io` if launching fails.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn launch_native_player(&self) -> Result<(), PlayerError> {
+        let start_sec = self.position_seconds.round() as u64;
+        let mut cmd = std::process::Command::new("mpv");
+        cmd.args([
+            "--gpu-context=wayland",
+            "--title=Kuro Native Anime Player",
+            &format!("--start={start_sec}"),
+        ]);
+        cmd.arg(&self.file_path);
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.spawn()?;
+        Ok(())
+    }
+
+    /// Launch native player.
     ///
     /// # Errors
     /// Returns `PlayerError::Io` if launching fails.
     pub fn launch_external(&self) -> Result<(), PlayerError> {
-        std::process::Command::new("xdg-open")
-            .arg(&self.file_path)
-            .spawn()?;
-        Ok(())
+        self.launch_native_player()
     }
 }
 

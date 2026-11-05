@@ -66,5 +66,8 @@ pub enum Commands {
         /// Automatically open the episodes modal for the first search result.
         #[arg(long)]
         select_first: bool,
+        /// Direct file path to open in the native player immediately.
+        #[arg(long)]
+        play: Option<PathBuf>,
     },
 }

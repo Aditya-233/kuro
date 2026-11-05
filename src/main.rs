@@ -87,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Gui {
             query,
             select_first,
+            play,
         }) => {
             let default_font = iced::Font {
                 family: iced::font::Family::Name("Liberation Sans"),
@@ -94,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             iced::application(
-                move || App::with_initial_query(query.clone(), select_first),
+                move || App::with_initial_options(query.clone(), select_first, play.clone()),
                 App::update,
                 App::view,
             )
@@ -106,6 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .font(FONT_BYTES)
             .default_font(default_font)
             .scale_factor(App::scale_factor)
+            .subscription(App::subscription)
             .title("Kuro — Anime")
             .theme(App::theme)
             .run()?;
@@ -129,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .font(FONT_BYTES)
             .default_font(default_font)
             .scale_factor(App::scale_factor)
+            .subscription(App::subscription)
             .title("Kuro — Anime")
             .theme(App::theme)
             .run()?;
