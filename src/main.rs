@@ -10,6 +10,8 @@ use kuro::agent::{
 use kuro::cli::{Cli, Commands};
 use kuro::gui::App;
 
+const FONT_BYTES: &[u8] = include_bytes!("../fonts/LiberationSans-Regular.ttf");
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -74,8 +76,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Some(Commands::Gui) | None => {
+            let default_font = iced::Font {
+                family: iced::font::Family::Name("Liberation Sans"),
+                ..iced::Font::DEFAULT
+            };
+
             iced::application(App::new, App::update, App::view)
-                .title("Kuro / 黒")
+                .font(FONT_BYTES)
+                .default_font(default_font)
+                .title("Kuro — Anime")
                 .theme(App::theme)
                 .run()?;
         }

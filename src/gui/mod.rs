@@ -1,4 +1,4 @@
-//! Iced Monochrome Native Desktop GUI for Kuro.
+//! Iced T3-Code Aesthetic Native Desktop GUI for Kuro.
 
 pub mod theme;
 
@@ -89,10 +89,10 @@ impl App {
         }
     }
 
-    /// Theme specification using our custom monochrome palette.
+    /// Theme specification using T3-Code aesthetic palette.
     #[must_use]
     pub fn theme(&self) -> Theme {
-        Theme::custom("Kuro Monochrome", theme::custom_monochrome_palette())
+        Theme::custom("T3 Dark", theme::custom_t3_palette())
     }
 
     /// Elm Architecture update cycle.
@@ -255,29 +255,52 @@ impl App {
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn view(&self) -> Element<'_, Message> {
-        let header = row![
-            text("KURO / 黒").size(24).color(theme::ACCENT_WHITE),
-            space::horizontal(),
+        let brand_badge = container(text("ANIME").size(10).color(theme::ACCENT_BLUE))
+            .padding([2, 6])
+            .style(|_| theme::badge_style(true));
+
+        let brand = row![
+            text("KURO").size(22).color(theme::TEXT_PRIMARY),
+            brand_badge,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+
+        let search_bar = row![
             text_input(
-                "Search anime (e.g. Solo Leveling, Quintessential Quintuplets)...",
+                "Search anime (e.g. Solo Leveling, Attack on Titan, Quintuplets)...",
                 &self.search_query
             )
             .on_input(Message::SearchInputChanged)
             .on_submit(Message::SearchSubmitted)
-            .padding(10)
-            .width(420),
-            button(text(if self.is_searching { "..." } else { "Search" }))
-                .on_press(Message::SearchSubmitted)
-                .padding([10, 20]),
+            .padding([8, 14])
+            .width(440)
+            .style(|_, s| theme::search_input_style(s)),
+            button(
+                text(if self.is_searching {
+                    "Searching..."
+                } else {
+                    "Search"
+                })
+                .size(13)
+                .color(theme::TEXT_PRIMARY)
+            )
+            .on_press(Message::SearchSubmitted)
+            .padding([8, 18])
+            .style(|_, s| theme::button_primary_style(s)),
         ]
-        .spacing(15)
+        .spacing(10)
         .align_y(Alignment::Center);
+
+        let header = row![brand, space::horizontal(), search_bar,]
+            .spacing(16)
+            .align_y(Alignment::Center);
 
         let status_bar = if let Some(msg) = &self.status_message {
             row![text(msg).size(13).color(theme::TEXT_MUTED)]
         } else {
             row![
-                text("Ready — Search for an anime show above to get started")
+                text("Search for any anime series above to view episodes and direct downloads.")
                     .size(13)
                     .color(theme::TEXT_MUTED)
             ]
@@ -288,86 +311,56 @@ impl App {
         let mut current_row = row![].spacing(16);
 
         for (i, show) in self.shows.iter().enumerate() {
-            let card = container(
-                column![
-                    text(&show.title).size(18).color(theme::ACCENT_WHITE),
-                    row![
-                        container(
-                            text(format!("{} Episodes", show.episode_count))
-                                .size(12)
-                                .color(theme::ACCENT_WHITE)
-                        )
-                        .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.18))),
-                            border: iced::Border {
-                                radius: 4.0.into(),
-                                width: 1.0,
-                                color: theme::BORDER_SLATE,
-                            },
-                            ..Default::default()
-                        }),
-                        container(text("1080p").size(12).color(theme::TEXT_MUTED))
-                            .padding([4, 8])
-                            .style(|_| container::Style {
-                                background: Some(Background::Color(Color::from_rgb(
-                                    0.12, 0.12, 0.14
-                                ))),
-                                border: iced::Border {
-                                    radius: 4.0.into(),
-                                    width: 1.0,
-                                    color: theme::BORDER_SLATE,
-                                },
-                                ..Default::default()
-                            }),
-                        container(text("SubsPlease").size(12).color(theme::TEXT_MUTED))
-                            .padding([4, 8])
-                            .style(|_| container::Style {
-                                background: Some(Background::Color(Color::from_rgb(
-                                    0.12, 0.12, 0.14
-                                ))),
-                                border: iced::Border {
-                                    radius: 4.0.into(),
-                                    width: 1.0,
-                                    color: theme::BORDER_SLATE,
-                                },
-                                ..Default::default()
-                            }),
-                    ]
-                    .spacing(8),
-                    space::vertical(),
-                    row![
-                        text("Click to view episodes")
-                            .size(12)
-                            .color(theme::TEXT_MUTED),
-                        space::horizontal(),
-                        button(text("Episodes →")).on_press(Message::SelectShow(show.clone())),
-                    ]
-                    .align_y(Alignment::Center),
+            let card_inner = column![
+                text(&show.title).size(16).color(theme::TEXT_PRIMARY),
+                row![
+                    container(
+                        text(format!("{} Episodes", show.episode_count))
+                            .size(11)
+                            .color(theme::ACCENT_BLUE)
+                    )
+                    .padding([2, 8])
+                    .style(|_| theme::badge_style(true)),
+                    container(text("1080p").size(11).color(theme::TEXT_MUTED))
+                        .padding([2, 8])
+                        .style(|_| theme::badge_style(false)),
+                    container(text("Direct CDN").size(11).color(theme::ACCENT_SUCCESS))
+                        .padding([2, 8])
+                        .style(|_| theme::badge_style(false)),
                 ]
-                .spacing(12)
-                .height(130),
+                .spacing(8),
+                space::vertical(),
+                row![
+                    text("Click to browse episodes")
+                        .size(11)
+                        .color(theme::TEXT_MUTED),
+                    space::horizontal(),
+                    button(text("Episodes").size(12).color(theme::TEXT_PRIMARY))
+                        .on_press(Message::SelectShow(show.clone()))
+                        .padding([4, 12])
+                        .style(|_, s| theme::button_secondary_style(s)),
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .spacing(12);
+
+            let card = mouse_area(
+                container(card_inner)
+                    .width(360)
+                    .height(130)
+                    .padding(16)
+                    .style(|_| theme::card_style()),
             )
-            .width(360)
-            .padding(16)
-            .style(|_| container::Style {
-                background: Some(Background::Color(theme::SURFACE_CARD)),
-                border: iced::Border {
-                    radius: 8.0.into(),
-                    width: 1.0,
-                    color: theme::BORDER_SLATE,
-                },
-                ..Default::default()
-            });
+            .on_press(Message::SelectShow(show.clone()));
 
             current_row = current_row.push(card);
-            if (i + 1) % 2 == 0 {
+            if (i + 1) % 3 == 0 {
                 cards_col = cards_col.push(current_row);
                 current_row = row![].spacing(16);
             }
         }
 
-        if !self.shows.is_empty() && !self.shows.len().is_multiple_of(2) {
+        if !self.shows.is_empty() && !self.shows.len().is_multiple_of(3) {
             cards_col = cards_col.push(current_row);
         }
 
@@ -375,13 +368,16 @@ impl App {
         let mut downloads_section = column![].spacing(8);
         if !self.active_downloads.is_empty() {
             downloads_section = downloads_section
-                .push(text("Active Downloads").size(14).color(theme::ACCENT_WHITE));
+                .push(text("Active Downloads").size(14).color(theme::TEXT_PRIMARY));
             for task in &self.active_downloads {
                 let item = row![
-                    text(&task.file_name).size(13).width(350),
+                    text(&task.file_name)
+                        .size(13)
+                        .color(theme::TEXT_PRIMARY)
+                        .width(350),
                     text(format!("{}%", task.progress_percent()))
                         .size(13)
-                        .color(theme::ACCENT_WHITE),
+                        .color(theme::ACCENT_BLUE),
                     text(task.formatted_speed())
                         .size(12)
                         .color(theme::TEXT_MUTED),
@@ -390,11 +386,15 @@ impl App {
                         .color(theme::TEXT_MUTED),
                     space::horizontal(),
                     if task.status == DownloadStatus::Completed {
-                        button(text("Play"))
+                        button(text("▶ Play").size(12).color(theme::TEXT_PRIMARY))
                             .on_press(Message::PlayEpisode(PathBuf::from(&task.destination_path)))
+                            .padding([4, 12])
+                            .style(|_, s| theme::button_primary_style(s))
                     } else {
-                        button(text("Downloading...")).padding([2, 8])
-                    }
+                        button(text("Downloading...").size(12).color(theme::ACCENT_BLUE))
+                            .padding([4, 10])
+                            .style(|_, s| theme::button_secondary_style(s))
+                    },
                 ]
                 .spacing(16)
                 .align_y(Alignment::Center);
@@ -423,23 +423,25 @@ impl App {
                 let ep_row = row![
                     container(
                         text(format!("EP {:02}", ep.episode_number))
-                            .size(12)
-                            .color(theme::ACCENT_WHITE)
+                            .size(11)
+                            .color(theme::ACCENT_BLUE)
                     )
-                    .padding([4, 8])
-                    .style(|_| container::Style {
-                        background: Some(Background::Color(Color::from_rgb(0.18, 0.18, 0.22))),
-                        border: iced::Border {
-                            radius: 4.0.into(),
-                            width: 1.0,
-                            color: theme::BORDER_SLATE,
-                        },
-                        ..Default::default()
-                    }),
-                    text(&ep.title).size(13).width(Length::FillPortion(3)),
-                    text("1080p").size(12).color(theme::TEXT_MUTED),
-                    // Strictly direct download button (NO magnet links!)
-                    button(text("Download")).on_press(Message::TriggerDownload(ep.clone())),
+                    .padding([3, 8])
+                    .style(|_| theme::badge_style(true)),
+                    text(&ep.title)
+                        .size(13)
+                        .color(theme::TEXT_PRIMARY)
+                        .width(Length::FillPortion(3)),
+                    container(text(ep.quality.as_str()).size(11).color(theme::TEXT_MUTED))
+                        .padding([3, 8])
+                        .style(|_| theme::badge_style(false)),
+                    container(text(ep.formatted_size()).size(11).color(theme::TEXT_MUTED))
+                        .padding([3, 8])
+                        .style(|_| theme::badge_style(false)),
+                    button(text("Download").size(12).color(theme::TEXT_PRIMARY))
+                        .on_press(Message::TriggerDownload(ep.clone()))
+                        .padding([4, 14])
+                        .style(|_, s| theme::button_primary_style(s)),
                 ]
                 .spacing(12)
                 .align_y(Alignment::Center);
@@ -450,23 +452,26 @@ impl App {
             let modal_box = container(
                 column![
                     row![
-                        text(&show.title).size(20).color(theme::ACCENT_WHITE),
+                        text(&show.title).size(18).color(theme::TEXT_PRIMARY),
                         space::horizontal(),
-                        button(text("✕")).on_press(Message::DismissModal),
+                        button(text("✕ Close").size(12).color(theme::TEXT_PRIMARY))
+                            .on_press(Message::DismissModal)
+                            .padding([4, 12])
+                            .style(|_, s| theme::button_secondary_style(s)),
                     ]
                     .align_y(Alignment::Center),
-                    scrollable(ep_list).height(400),
+                    scrollable(ep_list).height(420),
                 ]
                 .spacing(16),
             )
-            .width(680)
-            .padding(20)
+            .width(760)
+            .padding(24)
             .style(|_| container::Style {
-                background: Some(Background::Color(theme::SURFACE_CARD)),
+                background: Some(Background::Color(theme::SURFACE)),
                 border: iced::Border {
                     radius: 12.0.into(),
                     width: 1.0,
-                    color: theme::BORDER_SLATE,
+                    color: theme::BORDER_HIGHLIGHT,
                 },
                 ..Default::default()
             });
@@ -492,50 +497,65 @@ impl App {
                     row![
                         text(format!("Now Playing: {}", player.file_path().display()))
                             .size(16)
-                            .color(theme::ACCENT_WHITE),
+                            .color(theme::TEXT_PRIMARY),
                         space::horizontal(),
-                        button(text("✕ Close")).on_press(Message::ClosePlayer),
+                        button(text("✕ Close").size(12).color(theme::TEXT_PRIMARY))
+                            .on_press(Message::ClosePlayer)
+                            .padding([4, 12])
+                            .style(|_, s| theme::button_secondary_style(s)),
                     ]
                     .align_y(Alignment::Center),
                     container(center(
-                        text("▶ Video Stream Active (wgpu render)")
-                            .size(16)
+                        text("▶ In-App Direct Stream Active (wgpu engine)")
+                            .size(15)
                             .color(theme::TEXT_MUTED)
                     ))
                     .width(Fill)
-                    .height(360)
+                    .height(380)
                     .style(|_| container::Style {
                         background: Some(Background::Color(Color::BLACK)),
                         border: iced::Border {
                             radius: 8.0.into(),
                             width: 1.0,
-                            color: theme::BORDER_SLATE,
+                            color: theme::BORDER,
                         },
                         ..Default::default()
                     }),
                     row![
-                        button(text(if player.is_playing() { "Pause" } else { "Play" }))
-                            .on_press(Message::TogglePlayback),
+                        button(
+                            text(if player.is_playing() { "Pause" } else { "Play" })
+                                .size(13)
+                                .color(theme::TEXT_PRIMARY)
+                        )
+                        .on_press(Message::TogglePlayback)
+                        .padding([6, 16])
+                        .style(|_, s| theme::button_primary_style(s)),
                         text(player.formatted_time())
                             .size(13)
-                            .color(theme::ACCENT_WHITE),
+                            .color(theme::TEXT_PRIMARY),
                         space::horizontal(),
-                        button(text("External Player"))
-                            .on_press(Message::PlayEpisode(player.file_path().to_path_buf())),
+                        button(
+                            text("Open in External Player")
+                                .size(12)
+                                .color(theme::TEXT_PRIMARY)
+                        )
+                        .on_press(Message::PlayEpisode(player.file_path().to_path_buf()))
+                        .padding([6, 14])
+                        .style(|_, s| theme::button_secondary_style(s)),
                     ]
                     .spacing(16)
                     .align_y(Alignment::Center),
                 ]
                 .spacing(16),
             )
-            .width(760)
-            .padding(20)
+            .width(800)
+            .padding(24)
             .style(|_| container::Style {
-                background: Some(Background::Color(theme::SURFACE_CARD)),
+                background: Some(Background::Color(theme::SURFACE)),
                 border: iced::Border {
                     radius: 12.0.into(),
                     width: 1.0,
-                    color: theme::BORDER_SLATE,
+                    color: theme::BORDER_HIGHLIGHT,
                 },
                 ..Default::default()
             });
