@@ -3,7 +3,7 @@
 pub mod theme;
 
 use crate::downloader::{DownloadEngine, DownloadProgressEvent};
-use crate::models::{AnimeShow, DownloadStatus, DownloadTask, Episode, Quality};
+use crate::models::{AnimeShow, DownloadStatus, DownloadTask, Episode, LocalVideoFile, Quality};
 use crate::player::PlaybackSession;
 use crate::sources::AnimeSourceClient;
 use iced::widget::{
@@ -28,8 +28,12 @@ pub struct App {
     pub episodes: Vec<Episode>,
     /// Active and completed download tasks.
     pub active_downloads: Vec<DownloadTask>,
+    /// Local downloaded video files in ~/Downloads.
+    pub local_files: Vec<LocalVideoFile>,
     /// Search in-flight flag.
     pub is_searching: bool,
+    /// Automatically open the episodes modal for the first search result.
+    pub auto_select_first: bool,
     /// Active in-app playback session.
     pub playback_session: Option<PlaybackSession>,
     /// Status message or error banner.
@@ -75,13 +79,20 @@ impl App {
     /// Create a new Kuro GUI application instance.
     #[must_use]
     pub fn new() -> Self {
+        let dl_dir = directories::UserDirs::new()
+            .and_then(|u| u.download_dir().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("/home/aditya/Downloads"));
+        let local_files = crate::sources::scan_local_downloads(&dl_dir);
+
         Self {
             search_query: String::new(),
             shows: Vec::new(),
             selected_show: None,
             episodes: Vec::new(),
             active_downloads: Vec::new(),
+            local_files,
             is_searching: false,
+            auto_select_first: false,
             playback_session: None,
             status_message: None,
             source_client: Arc::new(AnimeSourceClient::new()),
@@ -89,9 +100,27 @@ impl App {
         }
     }
 
+    /// Check whether an episode is already downloaded in ~/Downloads.
+    #[must_use]
+    pub fn is_file_downloaded(&self, ep_title: &str) -> Option<PathBuf> {
+        let dl_dir = directories::UserDirs::new()
+            .and_then(|u| u.download_dir().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("/home/aditya/Downloads"));
+        crate::sources::is_episode_downloaded(ep_title, &dl_dir)
+    }
+
+    /// Refresh list of locally downloaded files.
+    pub fn refresh_local_files(&mut self) {
+        let dl_dir = directories::UserDirs::new()
+            .and_then(|u| u.download_dir().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("/home/aditya/Downloads"));
+        self.local_files = crate::sources::scan_local_downloads(&dl_dir);
+    }
+
     /// Create an instance with an optional initial search query and task.
-    pub fn with_initial_query(query: Option<String>) -> (Self, Task<Message>) {
+    pub fn with_initial_query(query: Option<String>, select_first: bool) -> (Self, Task<Message>) {
         let mut app = Self::new();
+        app.auto_select_first = select_first;
         if let Some(q) = query {
             let _ = app.update(Message::SearchInputChanged(q));
             let task = app.update(Message::SearchSubmitted);
@@ -138,10 +167,15 @@ impl App {
             }
             Message::SearchResultsReceived(result) => {
                 self.is_searching = false;
+                self.refresh_local_files();
                 match result {
                     Ok(shows) => {
                         self.status_message = Some(format!("Found {} shows", shows.len()));
                         self.shows = shows;
+                        if self.auto_select_first && !self.shows.is_empty() {
+                            self.auto_select_first = false;
+                            return self.update(Message::SelectShow(self.shows[0].clone()));
+                        }
                     }
                     Err(e) => {
                         self.status_message = Some(format!("Error: {e}"));
@@ -151,6 +185,7 @@ impl App {
                 Task::none()
             }
             Message::SelectShow(show) => {
+                self.refresh_local_files();
                 self.selected_show = Some(show.clone());
                 self.episodes.clear();
                 self.status_message = Some(format!("Fetching episodes for {}...", show.title));
@@ -187,7 +222,7 @@ impl App {
             Message::TriggerDownload(ep) => {
                 let download_dir = directories::UserDirs::new()
                     .and_then(|u| u.download_dir().map(std::path::Path::to_path_buf))
-                    .unwrap_or_else(|| PathBuf::from("."));
+                    .unwrap_or_else(|| PathBuf::from("/home/aditya/Downloads"));
 
                 let dest_path = download_dir.join(&ep.title);
                 let task_id = format!("{}-{}", ep.show_id, ep.episode_number);
@@ -203,13 +238,13 @@ impl App {
                 self.status_message = Some(format!("Queued download for {}", ep.title));
 
                 let engine = Arc::clone(&self.download_engine);
-                let url = ep.direct_download_url.clone();
+                let episode = ep.clone();
                 let dest = dest_path;
 
                 let (tx, rx) = mpsc::channel(16);
 
                 tokio::spawn(async move {
-                    let _ = engine.download_url(&task_id, &url, &dest, tx).await;
+                    let _ = engine.download_episode(&task_id, &episode, &dest, tx).await;
                 });
 
                 let stream = iced::futures::stream::unfold(rx, |mut rx| async move {
@@ -239,6 +274,7 @@ impl App {
                             task.status = DownloadStatus::Completed;
                             self.status_message = Some(format!("Completed: {}", task.file_name));
                         }
+                        self.refresh_local_files();
                         // Automatically make available for playback
                         self.playback_session = Some(PlaybackSession::new(final_path, 1440.0));
                     }
@@ -252,7 +288,8 @@ impl App {
                 Task::none()
             }
             Message::PlayEpisode(path) => {
-                let session = PlaybackSession::new(path, 1440.0);
+                let session = PlaybackSession::new(path.clone(), 1440.0);
+                let _ = session.launch_external();
                 self.playback_session = Some(session);
                 Task::none()
             }
@@ -429,12 +466,60 @@ impl App {
             }
         }
 
+        // Local Downloaded Videos Panel (~/Downloads)
+        let mut local_downloads_section = column![].spacing(8);
+        if !self.local_files.is_empty() {
+            local_downloads_section = local_downloads_section.push(
+                row![
+                    text("Downloaded Videos (~/Downloads)")
+                        .size(14)
+                        .color(theme::TEXT_PRIMARY),
+                    container(
+                        text(format!("{} files", self.local_files.len()))
+                            .size(10)
+                            .color(theme::ACCENT_BLUE)
+                    )
+                    .padding([2, 6])
+                    .style(|_| theme::badge_style(true)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+
+            for f in &self.local_files {
+                let f_item = row![
+                    text("▶").size(11).color(theme::ACCENT_BLUE),
+                    text(&f.filename)
+                        .size(13)
+                        .color(theme::TEXT_PRIMARY)
+                        .width(Length::FillPortion(4)),
+                    container(
+                        text(format!("{} MB", f.size_mb))
+                            .size(11)
+                            .color(theme::TEXT_MUTED)
+                    )
+                    .padding([2, 8])
+                    .style(|_| theme::badge_style(false)),
+                    space::horizontal(),
+                    button(text("▶ Play").size(12).color(theme::TEXT_PRIMARY))
+                        .on_press(Message::PlayEpisode(f.path.clone()))
+                        .padding([4, 14])
+                        .style(|_, s| theme::button_primary_style(s)),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center);
+
+                local_downloads_section = local_downloads_section.push(f_item);
+            }
+        }
+
         let main_content = container(
             column![
                 header,
                 status_bar,
                 scrollable(cards_col).height(Fill),
                 downloads_section,
+                local_downloads_section,
             ]
             .spacing(20),
         )
@@ -446,6 +531,50 @@ impl App {
         if let Some(show) = &self.selected_show {
             let mut ep_list = column![].spacing(8);
             for ep in &self.episodes {
+                let downloaded_path = self.is_file_downloaded(&ep.title);
+                let is_downloading = self
+                    .active_downloads
+                    .iter()
+                    .any(|t| t.file_name == ep.title && t.status == DownloadStatus::Downloading);
+
+                let action_element = if let Some(path) = downloaded_path {
+                    row![
+                        container(
+                            text("✓ In ~/Downloads")
+                                .size(11)
+                                .color(theme::ACCENT_SUCCESS)
+                        )
+                        .padding([3, 8])
+                        .style(|_| theme::badge_style(false)),
+                        button(text("▶ Play").size(12).color(theme::TEXT_PRIMARY))
+                            .on_press(Message::PlayEpisode(path))
+                            .padding([4, 14])
+                            .style(|_, s| theme::button_primary_style(s)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                } else if is_downloading {
+                    let pct = self
+                        .active_downloads
+                        .iter()
+                        .find(|t| t.file_name == ep.title)
+                        .map_or(0, DownloadTask::progress_percent);
+                    row![button(
+                        text(format!("Downloading {pct}%"))
+                            .size(12)
+                            .color(theme::ACCENT_BLUE)
+                    )
+                    .padding([4, 10])
+                    .style(|_, s| theme::button_secondary_style(s)),]
+                    .align_y(Alignment::Center)
+                } else {
+                    row![button(text("Download").size(12).color(theme::TEXT_PRIMARY))
+                        .on_press(Message::TriggerDownload(ep.clone()))
+                        .padding([4, 14])
+                        .style(|_, s| theme::button_primary_style(s)),]
+                    .align_y(Alignment::Center)
+                };
+
                 let ep_row = row![
                     container(
                         text(format!("EP {:02}", ep.episode_number))
@@ -464,10 +593,7 @@ impl App {
                     container(text(ep.formatted_size()).size(11).color(theme::TEXT_MUTED))
                         .padding([3, 8])
                         .style(|_| theme::badge_style(false)),
-                    button(text("Download").size(12).color(theme::TEXT_PRIMARY))
-                        .on_press(Message::TriggerDownload(ep.clone()))
-                        .padding([4, 14])
-                        .style(|_, s| theme::button_primary_style(s)),
+                    action_element,
                 ]
                 .spacing(12)
                 .align_y(Alignment::Center);
@@ -486,11 +612,17 @@ impl App {
                             .style(|_, s| theme::button_secondary_style(s)),
                     ]
                     .align_y(Alignment::Center),
-                    scrollable(ep_list).height(420),
+                    scrollable(container(ep_list).padding(iced::Padding {
+                        top: 0.0,
+                        right: 24.0,
+                        bottom: 0.0,
+                        left: 0.0,
+                    }),)
+                    .height(420),
                 ]
                 .spacing(16),
             )
-            .width(760)
+            .width(860)
             .padding(24)
             .style(|_| container::Style {
                 background: Some(Background::Color(theme::SURFACE)),

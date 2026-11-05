@@ -63,5 +63,8 @@ pub enum Commands {
         /// Optional search query to trigger on launch.
         #[arg(long, short)]
         query: Option<String>,
+        /// Automatically open the episodes modal for the first search result.
+        #[arg(long)]
+        select_first: bool,
     },
 }

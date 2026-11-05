@@ -67,4 +67,18 @@ async fn test_gui_state_machine() {
     // 7. Dismiss Modal
     let _ = app.update(Message::DismissModal);
     assert!(app.selected_show.is_none());
+
+    // 8. Test Local Files Detection
+    let temp_dir = std::env::temp_dir().join("kuro_gui_test_dir");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).expect("create test dir");
+    let sample = temp_dir.join("[SubsPlease] Solo Leveling - 01 (1080p).mkv");
+    std::fs::write(&sample, b"dummy").expect("write test file");
+
+    let is_dl = kuro::sources::is_episode_downloaded(
+        "[SubsPlease] Solo Leveling - 01 (1080p).mkv",
+        &temp_dir,
+    );
+    assert!(is_dl.is_some());
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

@@ -41,6 +41,16 @@ impl Quality {
             Self::P480 => "480p",
         }
     }
+
+    /// Numerical quality ranking (higher is better).
+    #[must_use]
+    pub const fn rank(self) -> u32 {
+        match self {
+            Self::P1080 => 100,
+            Self::P720 => 70,
+            Self::P480 => 40,
+        }
+    }
 }
 
 /// An anime show entry with metadata.
@@ -87,6 +97,17 @@ pub struct Episode {
     pub xdcc_bot: Option<String>,
     /// XDCC pack number, if available.
     pub xdcc_pack: Option<u32>,
+}
+
+/// A locally downloaded anime video file on disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalVideoFile {
+    /// Base file name.
+    pub filename: String,
+    /// Absolute path to the file on disk.
+    pub path: std::path::PathBuf,
+    /// File size in megabytes.
+    pub size_mb: u64,
 }
 
 impl Episode {

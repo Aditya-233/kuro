@@ -220,11 +220,11 @@ pub async fn execute_download(
     let (tx, mut rx) = mpsc::channel(32);
 
     let task_id = format!("{show}-{ep_num}");
-    let download_url = episode.direct_download_url.clone();
+    let ep_clone = episode.clone();
 
     tokio::spawn(async move {
         let _ = engine
-            .download_url(&task_id, &download_url, &dest_file, tx)
+            .download_episode(&task_id, &ep_clone, &dest_file, tx)
             .await;
     });
 

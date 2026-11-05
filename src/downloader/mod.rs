@@ -229,4 +229,155 @@ impl DownloadEngine {
 
         Ok(())
     }
+
+    /// Download an episode by dispatching to the local XDCC daemon or fallback HTTP.
+    ///
+    /// # Errors
+    /// Returns `DownloadError` on failure.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
+    )]
+    pub async fn download_episode(
+        &self,
+        task_id: &str,
+        episode: &crate::models::Episode,
+        dest: &Path,
+        progress_tx: mpsc::Sender<DownloadProgressEvent>,
+    ) -> Result<(), DownloadError> {
+        let server_url = "http://127.0.0.1:8888";
+        let bot = episode.xdcc_bot.clone().unwrap_or_default();
+        let pack = episode.xdcc_pack.map(|p| p.to_string()).unwrap_or_default();
+        let filename = dest
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let magnet = episode.direct_download_url.clone();
+
+        let payload = serde_json::json!({
+            "bot": bot,
+            "pack": pack,
+            "filename": filename,
+            "magnet": magnet
+        });
+
+        let dl_endpoint = format!("{server_url}/api/download");
+        let post_res = self.client.post(&dl_endpoint).json(&payload).send().await;
+
+        if let Ok(resp) = post_res {
+            if resp.status().is_success() {
+                let poll_url = format!("{server_url}/api/downloads");
+                let mut retry_count = 0;
+
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                    if let Ok(poll_resp) = self.client.get(&poll_url).send().await {
+                        if let Ok(poll_val) = poll_resp.json::<serde_json::Value>().await {
+                            if let Some(active) = poll_val.get("active").and_then(|a| a.as_object())
+                            {
+                                if let Some(t_info) = active.get(&filename) {
+                                    let status =
+                                        t_info.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                                    let speed_mb = t_info
+                                        .get("speed_mb")
+                                        .and_then(serde_json::Value::as_f64)
+                                        .unwrap_or(0.0);
+                                    let received_mb = t_info
+                                        .get("received_mb")
+                                        .and_then(serde_json::Value::as_f64)
+                                        .unwrap_or(0.0);
+                                    let total_mb = t_info
+                                        .get("total_mb")
+                                        .and_then(serde_json::Value::as_f64)
+                                        .unwrap_or(0.0);
+
+                                    let downloaded_bytes = (received_mb * 1024.0 * 1024.0) as u64;
+                                    let total_bytes = (total_mb * 1024.0 * 1024.0) as u64;
+                                    let speed_bps = (speed_mb * 1024.0 * 1024.0) as u64;
+
+                                    let _ = progress_tx
+                                        .send(DownloadProgressEvent::Progress {
+                                            id: task_id.to_string(),
+                                            downloaded_bytes,
+                                            total_bytes,
+                                            speed_bps,
+                                        })
+                                        .await;
+
+                                    if status == "completed" {
+                                        let _ = progress_tx
+                                            .send(DownloadProgressEvent::Completed {
+                                                id: task_id.to_string(),
+                                                final_path: dest.to_path_buf(),
+                                            })
+                                            .await;
+                                        return Ok(());
+                                    }
+
+                                    if status == "error" {
+                                        let err = t_info
+                                            .get("error")
+                                            .and_then(|e| e.as_str())
+                                            .unwrap_or("Download error");
+                                        let _ = progress_tx
+                                            .send(DownloadProgressEvent::Failed {
+                                                id: task_id.to_string(),
+                                                reason: err.to_string(),
+                                            })
+                                            .await;
+                                        return Err(DownloadError::Io(std::io::Error::other(err)));
+                                    }
+                                } else if retry_count > 4 {
+                                    // Check if moved to completed files array
+                                    if let Some(files) =
+                                        poll_val.get("files").and_then(|f| f.as_array())
+                                    {
+                                        let in_completed = files.iter().any(|f| {
+                                            f.get("filename").and_then(|n| n.as_str())
+                                                == Some(&filename)
+                                        });
+                                        if in_completed {
+                                            let _ = progress_tx
+                                                .send(DownloadProgressEvent::Completed {
+                                                    id: task_id.to_string(),
+                                                    final_path: dest.to_path_buf(),
+                                                })
+                                                .await;
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    retry_count += 1;
+                    if retry_count > 600 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if episode.direct_download_url.starts_with("http://")
+            || episode.direct_download_url.starts_with("https://")
+        {
+            return self
+                .download_url(task_id, &episode.direct_download_url, dest, progress_tx)
+                .await;
+        }
+
+        let reason = "Download service unavailable or no active bot".to_string();
+        let _ = progress_tx
+            .send(DownloadProgressEvent::Failed {
+                id: task_id.to_string(),
+                reason: reason.clone(),
+            })
+            .await;
+        Err(DownloadError::Io(std::io::Error::other(reason)))
+    }
 }
