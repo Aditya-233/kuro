@@ -69,6 +69,8 @@ pub enum Message {
     TogglePlayback,
     /// Dismiss the playback overlay.
     ClosePlayer,
+    /// Exit the application.
+    ExitApp,
 }
 
 impl App {
@@ -93,6 +95,12 @@ impl App {
     #[must_use]
     pub fn theme(&self) -> Theme {
         Theme::custom("T3 Dark", theme::custom_t3_palette())
+    }
+
+    /// UI Scale factor (2.0x scaling).
+    #[must_use]
+    pub fn scale_factor(&self) -> f32 {
+        2.0
     }
 
     /// Elm Architecture update cycle.
@@ -248,6 +256,9 @@ impl App {
                 self.playback_session = None;
                 Task::none()
             }
+            Message::ExitApp => {
+                std::process::exit(0);
+            }
         }
     }
 
@@ -274,7 +285,7 @@ impl App {
             .on_input(Message::SearchInputChanged)
             .on_submit(Message::SearchSubmitted)
             .padding([8, 14])
-            .width(440)
+            .width(420)
             .style(|_, s| theme::search_input_style(s)),
             button(
                 text(if self.is_searching {
@@ -292,8 +303,13 @@ impl App {
         .spacing(10)
         .align_y(Alignment::Center);
 
-        let header = row![brand, space::horizontal(), search_bar,]
-            .spacing(16)
+        let exit_btn = button(text("✕").size(13).color(theme::TEXT_MUTED))
+            .on_press(Message::ExitApp)
+            .padding([8, 12])
+            .style(|_, s| theme::button_secondary_style(s));
+
+        let header = row![brand, space::horizontal(), search_bar, exit_btn]
+            .spacing(12)
             .align_y(Alignment::Center);
 
         let status_bar = if let Some(msg) = &self.status_message {
@@ -354,13 +370,13 @@ impl App {
             .on_press(Message::SelectShow(show.clone()));
 
             current_row = current_row.push(card);
-            if (i + 1) % 3 == 0 {
+            if (i + 1) % 2 == 0 {
                 cards_col = cards_col.push(current_row);
                 current_row = row![].spacing(16);
             }
         }
 
-        if !self.shows.is_empty() && !self.shows.len().is_multiple_of(3) {
+        if !self.shows.is_empty() && !self.shows.len().is_multiple_of(2) {
             cards_col = cards_col.push(current_row);
         }
 

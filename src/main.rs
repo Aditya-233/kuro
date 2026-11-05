@@ -84,6 +84,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             iced::application(App::new, App::update, App::view)
                 .font(FONT_BYTES)
                 .default_font(default_font)
+                .decorations(false)
+                .scale_factor(App::scale_factor)
                 .title("Kuro — Anime")
                 .theme(App::theme)
                 .run()?;
