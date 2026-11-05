@@ -88,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             query,
             select_first,
             play,
+            tour,
         }) => {
             let default_font = iced::Font {
                 family: iced::font::Family::Name("Liberation Sans"),
@@ -95,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             iced::application(
-                move || App::with_initial_options(query.clone(), select_first, play.clone()),
+                move || App::with_initial_options(query.clone(), select_first, play.clone(), tour),
                 App::update,
                 App::view,
             )

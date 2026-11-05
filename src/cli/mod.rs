@@ -69,5 +69,8 @@ pub enum Commands {
         /// Direct file path to open in the native player immediately.
         #[arg(long)]
         play: Option<PathBuf>,
+        /// Run automated UI walkthrough taking screenshots at each step.
+        #[arg(long)]
+        tour: bool,
     },
 }

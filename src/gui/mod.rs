@@ -38,6 +38,8 @@ pub struct App {
     pub playback_session: Option<PlaybackSession>,
     /// Status message or error banner.
     pub status_message: Option<String>,
+    /// Whether automated UI tour is active.
+    pub is_tour: bool,
     source_client: Arc<AnimeSourceClient>,
     download_engine: Arc<DownloadEngine>,
 }
@@ -79,8 +81,21 @@ pub enum Message {
     PlayerTick,
     /// Launch external native Wayland player via MPV.
     LaunchNativePopout,
+    /// Automated walkthrough step trigger.
+    TourStep(u32),
     /// Dismiss the playback overlay.
     ClosePlayer,
+}
+
+fn capture_tour_snap(name: &str) {
+    let path = format!(
+        "/home/aditya/.gemini/antigravity-cli/brain/76542c33-9796-42c0-9b04-6b1293c571b3/walkthrough/{name}"
+    );
+    let _ = std::process::Command::new("grim")
+        .env("WAYLAND_DISPLAY", "wayland-0")
+        .env("XDG_RUNTIME_DIR", "/run/user/1000")
+        .arg(&path)
+        .output();
 }
 
 impl App {
@@ -103,6 +118,7 @@ impl App {
             auto_select_first: false,
             playback_session: None,
             status_message: None,
+            is_tour: false,
             source_client: Arc::new(AnimeSourceClient::new()),
             download_engine: Arc::new(DownloadEngine::new()),
         }
@@ -125,14 +141,26 @@ impl App {
         self.local_files = crate::sources::scan_local_downloads(&dl_dir);
     }
 
-    /// Create an instance with optional initial search query, auto-select, or immediate play file.
+    /// Create an instance with optional initial search query, auto-select, immediate play file, or automated tour.
     pub fn with_initial_options(
         query: Option<String>,
         select_first: bool,
         play: Option<PathBuf>,
+        tour: bool,
     ) -> (Self, Task<Message>) {
         let mut app = Self::new();
         app.auto_select_first = select_first;
+        app.is_tour = tour;
+
+        if tour {
+            let task = Task::perform(
+                async {
+                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                },
+                |()| Message::TourStep(1),
+            );
+            return (app, task);
+        }
 
         if let Some(path) = play {
             let task = app.update(Message::PlayEpisode(path));
@@ -150,7 +178,7 @@ impl App {
 
     /// Backwards compatible wrapper for `with_initial_query`.
     pub fn with_initial_query(query: Option<String>, select_first: bool) -> (Self, Task<Message>) {
-        Self::with_initial_options(query, select_first, None)
+        Self::with_initial_options(query, select_first, None, false)
     }
 
     /// Theme specification using T3-Code aesthetic palette.
@@ -206,6 +234,15 @@ impl App {
                     Ok(shows) => {
                         self.status_message = Some(format!("Found {} shows", shows.len()));
                         self.shows = shows;
+                        if self.is_tour && !self.shows.is_empty() {
+                            return Task::perform(
+                                async {
+                                    tokio::time::sleep(std::time::Duration::from_millis(1200))
+                                        .await;
+                                },
+                                |()| Message::TourStep(3),
+                            );
+                        }
                         if self.auto_select_first && !self.shows.is_empty() {
                             self.auto_select_first = false;
                             return self.update(Message::SelectShow(self.shows[0].clone()));
@@ -246,6 +283,15 @@ impl App {
                     Ok(episodes) => {
                         self.status_message = Some(format!("Loaded {} episodes", episodes.len()));
                         self.episodes = episodes;
+                        if self.is_tour && !self.episodes.is_empty() {
+                            return Task::perform(
+                                async {
+                                    tokio::time::sleep(std::time::Duration::from_millis(1500))
+                                        .await;
+                                },
+                                |()| Message::TourStep(4),
+                            );
+                        }
                     }
                     Err(e) => {
                         self.status_message = Some(format!("Error loading episodes: {e}"));
@@ -416,6 +462,118 @@ impl App {
                 self.playback_session = None;
                 Task::none()
             }
+            Message::TourStep(1) => {
+                capture_tour_snap("01_initial_screen.png");
+                self.search_query = "Sousou no Frieren".to_string();
+                Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    },
+                    |()| Message::TourStep(2),
+                )
+            }
+            Message::TourStep(2) => {
+                capture_tour_snap("02_typed_search.png");
+                self.update(Message::SearchSubmitted)
+            }
+            Message::TourStep(3) => {
+                capture_tour_snap("03_search_results.png");
+                let target_show = self
+                    .shows
+                    .iter()
+                    .find(|s| s.title.contains("S2"))
+                    .or_else(|| self.shows.first())
+                    .cloned();
+                if let Some(show) = target_show {
+                    self.update(Message::SelectShow(show))
+                } else {
+                    Task::none()
+                }
+            }
+            Message::TourStep(4) => {
+                capture_tour_snap("04_episodes_modal.png");
+                let target_ep = self
+                    .episodes
+                    .iter()
+                    .find(|e| e.episode_number == 2)
+                    .or_else(|| self.episodes.get(1))
+                    .cloned();
+                let dl_task = if let Some(ep) = target_ep {
+                    self.update(Message::TriggerDownload(ep))
+                } else {
+                    Task::none()
+                };
+                let next_task = Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                    },
+                    |()| Message::TourStep(5),
+                );
+                Task::batch([dl_task, next_task])
+            }
+            Message::TourStep(5) => {
+                capture_tour_snap("05_download_progress.png");
+                let dismiss_task = self.update(Message::DismissModal);
+                let next_task = Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                    },
+                    |()| Message::TourStep(6),
+                );
+                Task::batch([dismiss_task, next_task])
+            }
+            Message::TourStep(6) => {
+                capture_tour_snap("06_modal_closed.png");
+                let target = PathBuf::from(
+                    "/home/aditya/Downloads/[SubsPlease] Sousou no Frieren S2 - 01 (1080p) [4277EF46].mkv",
+                );
+                let play_task = self.update(Message::PlayEpisode(target));
+                let next_task = Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+                    },
+                    |()| Message::TourStep(7),
+                );
+                Task::batch([play_task, next_task])
+            }
+            Message::TourStep(7) => {
+                capture_tour_snap("07_player_in_app.png");
+                let pause_task = self.update(Message::TogglePlayback);
+                let next_task = Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                    },
+                    |()| Message::TourStep(8),
+                );
+                Task::batch([pause_task, next_task])
+            }
+            Message::TourStep(8) => {
+                capture_tour_snap("08_player_paused.png");
+                let seek_task = self.update(Message::SeekRelative(10.0));
+                let next_task = Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+                    },
+                    |()| Message::TourStep(9),
+                );
+                Task::batch([seek_task, next_task])
+            }
+            Message::TourStep(9) => {
+                capture_tour_snap("09_player_seeked.png");
+                let close_task = self.update(Message::ClosePlayer);
+                let next_task = Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                    },
+                    |()| Message::TourStep(10),
+                );
+                Task::batch([close_task, next_task])
+            }
+            Message::TourStep(10) => {
+                capture_tour_snap("10_player_closed.png");
+                std::process::exit(0);
+            }
+            Message::TourStep(_) => Task::none(),
         }
     }
 
