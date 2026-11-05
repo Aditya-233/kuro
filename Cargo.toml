@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # GUI Runtime
-iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "wayland", "tokio", "image"] }
+iced = { version = "0.14.0", default-features = false, features = ["wgpu", "wayland", "tokio", "image"] }
 
 # Async & Networking (Pure Rust TLS - zero C OpenSSL dependency)
 tokio = { version = "1.43", features = ["rt-multi-thread", "rt", "sync", "macros", "time", "io-util", "fs"] }
@@ -38,6 +38,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # System & Files
 directories = "6.0"
 chrono = "0.4"
+matroska-demuxer = "0.8.1"
+rust_h264 = "0.6.1"
 
 [dev-dependencies]
 tempfile = "3.17"
