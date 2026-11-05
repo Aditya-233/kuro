@@ -75,13 +75,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Gui) | None => {
+        Some(Commands::Gui { query }) => {
             let default_font = iced::Font {
                 family: iced::font::Family::Name("Liberation Sans"),
                 ..iced::Font::DEFAULT
             };
 
-            iced::application(App::new, App::update, App::view)
+            iced::application(
+                move || App::with_initial_query(query.clone()),
+                App::update,
+                App::view,
+            )
+            .font(FONT_BYTES)
+            .default_font(default_font)
+            .decorations(false)
+            .scale_factor(App::scale_factor)
+            .title("Kuro — Anime")
+            .theme(App::theme)
+            .run()?;
+        }
+        None => {
+            let default_font = iced::Font {
+                family: iced::font::Family::Name("Liberation Sans"),
+                ..iced::Font::DEFAULT
+            };
+
+            iced::application(|| App::with_initial_query(None), App::update, App::view)
                 .font(FONT_BYTES)
                 .default_font(default_font)
                 .decorations(false)

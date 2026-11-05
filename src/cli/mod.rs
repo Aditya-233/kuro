@@ -59,5 +59,9 @@ pub enum Commands {
     /// Run automated agent diagnostics test suite.
     AgentTest,
     /// Explicitly launch the Iced monochrome GUI.
-    Gui,
+    Gui {
+        /// Optional search query to trigger on launch.
+        #[arg(long, short)]
+        query: Option<String>,
+    },
 }

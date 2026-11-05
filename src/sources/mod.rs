@@ -3,11 +3,11 @@
 pub mod aliases;
 pub mod parser;
 
-pub use aliases::resolve_anime_aliases;
+pub use aliases::{english_display_title, resolve_anime_aliases};
 pub use parser::{parse_filename_metadata, ParsedReleaseMeta};
 
 use crate::models::{AnimeShow, Episode, Quality};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use thiserror::Error;
 
@@ -96,10 +96,11 @@ impl AnimeSourceClient {
         let mut shows = Vec::new();
         for (title, count) in show_counts {
             let slug = title.to_ascii_lowercase().replace(' ', "-");
+            let eng = english_display_title(&title).or_else(|| Some(title.clone()));
             shows.push(AnimeShow {
                 id: slug,
                 title: title.clone(),
-                english_title: Some(title),
+                english_title: eng,
                 romaji_title: None,
                 episode_count: count,
                 status: "Available".to_string(),
@@ -112,43 +113,103 @@ impl AnimeSourceClient {
         Ok(shows)
     }
 
-    /// Search anime by query across `SubsPlease` and known aliases.
+    /// Search anime by query across `SubsPlease` and known aliases with pagination.
     ///
     /// # Errors
     /// Returns `SourceError` if network requests fail or no results are found.
     pub async fn search(&self, query: &str) -> Result<Vec<AnimeShow>, SourceError> {
         let aliases = resolve_anime_aliases(query);
-        let mut all_shows = Vec::new();
-        let mut seen_titles = std::collections::HashSet::new();
+        let mut show_counts: HashMap<String, u32> = HashMap::new();
+        let mut show_subtitles: HashMap<String, String> = HashMap::new();
+        let mut seen_release_keys: HashSet<String> = HashSet::new();
 
         for candidate in aliases {
             let encoded = urlencoding_simple(&candidate);
-            let url = format!("{}?f=search&tz=Asia/Kolkata&s={}", self.base_url, encoded);
+            for p in 0..3 {
+                let url = format!(
+                    "{}?f=search&tz=Asia/Kolkata&s={}&p={}",
+                    self.base_url, encoded, p
+                );
 
-            if let Ok(resp) = self.client.get(&url).send().await {
-                if resp.status().is_success() {
-                    if let Ok(text) = resp.text().await {
-                        if let Ok(shows) = self.parse_subsplease_search_response(&text) {
-                            for show in shows {
-                                if seen_titles.insert(show.title.clone()) {
-                                    all_shows.push(show);
+                let Ok(resp) = self.client.get(&url).send().await else {
+                    break;
+                };
+                if !resp.status().is_success() {
+                    break;
+                }
+                let Ok(text) = resp.text().await else {
+                    break;
+                };
+                let trimmed = text.trim();
+                if trimmed.starts_with('[') {
+                    break;
+                }
+                let Ok(raw_val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                    break;
+                };
+                let Some(obj) = raw_val.as_object() else {
+                    break;
+                };
+                if obj.is_empty() {
+                    break;
+                }
+
+                let page_size = obj.len();
+                for (key, val) in obj {
+                    if seen_release_keys.insert(key.clone()) {
+                        let show_name = val
+                            .get("show")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or_else(|| {
+                                if let Some((show_part, _)) = key.split_once(" - ") {
+                                    show_part
+                                } else {
+                                    key.as_str()
                                 }
-                            }
+                            })
+                            .trim();
+
+                        *show_counts.entry(show_name.to_string()).or_insert(0) += 1;
+                        if let Some(eng) = english_display_title(show_name) {
+                            show_subtitles.entry(show_name.to_string()).or_insert(eng);
                         }
                     }
+                }
+
+                if page_size < 30 {
+                    break;
                 }
             }
         }
 
-        if all_shows.is_empty() {
-            Err(SourceError::NotFound(query.to_string()))
-        } else {
-            all_shows.sort_by(|a, b| a.title.cmp(&b.title));
-            Ok(all_shows)
+        if show_counts.is_empty() {
+            return Err(SourceError::NotFound(query.to_string()));
         }
+
+        let mut shows = Vec::new();
+        for (title, count) in show_counts {
+            let slug = title.to_ascii_lowercase().replace(' ', "-");
+            let eng = show_subtitles
+                .get(&title)
+                .cloned()
+                .or_else(|| Some(title.clone()));
+            shows.push(AnimeShow {
+                id: slug,
+                title: title.clone(),
+                english_title: eng,
+                romaji_title: None,
+                episode_count: count,
+                status: "Available".to_string(),
+                quality_badges: vec!["1080p".to_string(), "SubsPlease".to_string()],
+                synopsis: "High-definition release from SubsPlease".to_string(),
+            });
+        }
+
+        shows.sort_by(|a, b| a.title.cmp(&b.title));
+        Ok(shows)
     }
 
-    /// Retrieve episode releases for a given anime show.
+    /// Retrieve episode releases for a given anime show with multi-page pagination.
     ///
     /// # Errors
     /// Returns `SourceError` if network or parsing fails.
@@ -158,12 +219,41 @@ impl AnimeSourceClient {
         preferred_quality: Quality,
     ) -> Result<Vec<Episode>, SourceError> {
         let encoded = urlencoding_simple(show_name);
-        let url = format!("{}?f=search&tz=Asia/Kolkata&s={}", self.base_url, encoded);
+        let mut all_episodes = Vec::new();
+        let mut seen_ids = HashSet::new();
 
-        let resp = self.client.get(&url).send().await?;
-        let text = resp.text().await?;
+        for p in 0..10 {
+            let url = format!(
+                "{}?f=search&tz=Asia/Kolkata&s={}&p={}",
+                self.base_url, encoded, p
+            );
 
-        self.parse_episodes_from_json(&text, show_name, preferred_quality)
+            let resp = self.client.get(&url).send().await?;
+            let text = resp.text().await?;
+            let eps = self.parse_episodes_from_json(&text, show_name, preferred_quality)?;
+            if eps.is_empty() {
+                break;
+            }
+
+            let mut added = 0;
+            for ep in eps {
+                if seen_ids.insert(ep.id.clone()) {
+                    all_episodes.push(ep);
+                    added += 1;
+                }
+            }
+
+            if added == 0 {
+                break;
+            }
+        }
+
+        all_episodes.sort_by(|a, b| {
+            b.episode_number
+                .cmp(&a.episode_number)
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        Ok(all_episodes)
     }
 
     /// Parse episodes from a search/show JSON response.
@@ -219,8 +309,12 @@ impl AnimeSourceClient {
                     let quality = Quality::from_str_loose(res_str);
 
                     if quality == preferred_quality || preferred_quality == Quality::P1080 {
-                        let direct_url =
-                            dl.get("xdcc").and_then(|u| u.as_str()).unwrap_or_default();
+                        let direct_url = dl
+                            .get("xdcc")
+                            .and_then(|u| u.as_str())
+                            .or_else(|| val.get("xdcc").and_then(|u| u.as_str()))
+                            .unwrap_or_default();
+
                         if direct_url.starts_with("magnet:?") {
                             continue;
                         }
@@ -238,12 +332,21 @@ impl AnimeSourceClient {
                             .and_then(|b| b.as_str())
                             .map(ToString::to_string);
 
-                        let file_name = format!(
-                            "[SubsPlease] {} - {:02} ({}).mkv",
-                            show_name,
-                            ep_num,
-                            quality.as_str()
-                        );
+                        let ep_str = val.get("episode").and_then(|e| e.as_str()).unwrap_or("");
+                        let file_name = if ep_str.eq_ignore_ascii_case("movie") {
+                            format!(
+                                "[SubsPlease] {} - Movie ({}).mkv",
+                                show_name,
+                                quality.as_str()
+                            )
+                        } else {
+                            format!(
+                                "[SubsPlease] {} - {:02} ({}).mkv",
+                                show_name,
+                                ep_num,
+                                quality.as_str()
+                            )
+                        };
 
                         episodes.push(Episode {
                             id: format!("{show_name}-{ep_num}-{res_str}"),
@@ -263,7 +366,11 @@ impl AnimeSourceClient {
             }
         }
 
-        episodes.sort_by_key(|e| e.episode_number);
+        episodes.sort_by(|a, b| {
+            b.episode_number
+                .cmp(&a.episode_number)
+                .then_with(|| a.title.cmp(&b.title))
+        });
         Ok(episodes)
     }
 }

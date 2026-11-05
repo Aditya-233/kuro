@@ -69,8 +69,6 @@ pub enum Message {
     TogglePlayback,
     /// Dismiss the playback overlay.
     ClosePlayer,
-    /// Exit the application.
-    ExitApp,
 }
 
 impl App {
@@ -88,6 +86,18 @@ impl App {
             status_message: None,
             source_client: Arc::new(AnimeSourceClient::new()),
             download_engine: Arc::new(DownloadEngine::new()),
+        }
+    }
+
+    /// Create an instance with an optional initial search query and task.
+    pub fn with_initial_query(query: Option<String>) -> (Self, Task<Message>) {
+        let mut app = Self::new();
+        if let Some(q) = query {
+            let _ = app.update(Message::SearchInputChanged(q));
+            let task = app.update(Message::SearchSubmitted);
+            (app, task)
+        } else {
+            (app, Task::none())
         }
     }
 
@@ -256,9 +266,6 @@ impl App {
                 self.playback_session = None;
                 Task::none()
             }
-            Message::ExitApp => {
-                std::process::exit(0);
-            }
         }
     }
 
@@ -303,12 +310,7 @@ impl App {
         .spacing(10)
         .align_y(Alignment::Center);
 
-        let exit_btn = button(text("✕").size(13).color(theme::TEXT_MUTED))
-            .on_press(Message::ExitApp)
-            .padding([8, 12])
-            .style(|_, s| theme::button_secondary_style(s));
-
-        let header = row![brand, space::horizontal(), search_bar, exit_btn]
+        let header = row![brand, space::horizontal(), search_bar]
             .spacing(12)
             .align_y(Alignment::Center);
 
@@ -327,8 +329,16 @@ impl App {
         let mut current_row = row![].spacing(16);
 
         for (i, show) in self.shows.iter().enumerate() {
+            let mut title_col =
+                column![text(&show.title).size(15).color(theme::TEXT_PRIMARY)].spacing(2);
+            if let Some(eng) = &show.english_title {
+                if !eng.eq_ignore_ascii_case(&show.title) {
+                    title_col = title_col.push(text(eng).size(12).color(theme::TEXT_MUTED));
+                }
+            }
+
             let card_inner = column![
-                text(&show.title).size(16).color(theme::TEXT_PRIMARY),
+                title_col,
                 row![
                     container(
                         text(format!("{} Episodes", show.episode_count))
@@ -358,12 +368,12 @@ impl App {
                 ]
                 .align_y(Alignment::Center),
             ]
-            .spacing(12);
+            .spacing(10);
 
             let card = mouse_area(
                 container(card_inner)
                     .width(360)
-                    .height(130)
+                    .height(145)
                     .padding(16)
                     .style(|_| theme::card_style()),
             )
