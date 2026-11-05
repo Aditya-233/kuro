@@ -12,12 +12,15 @@ use kuro::gui::App;
 
 const FONT_BYTES: &[u8] = include_bytes!("../fonts/LiberationSans-Regular.ttf");
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
         Some(Commands::Search { query, json }) => {
-            let rt = tokio::runtime::Runtime::new()?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
             if let Err(e) = rt.block_on(execute_search(&query, json)) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
@@ -28,7 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             quality,
             json,
         }) => {
-            let rt = tokio::runtime::Runtime::new()?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
             if let Err(e) = rt.block_on(execute_episodes(&show, &quality, json)) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
@@ -40,7 +45,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             quality,
             output_dir,
         }) => {
-            let rt = tokio::runtime::Runtime::new()?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
             if let Err(e) = rt.block_on(execute_download(&show, ep, &quality, output_dir)) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
@@ -54,7 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::AgentTest) => {
             println!("Running Kuro Agent Diagnostics Suite...\n");
-            let rt = tokio::runtime::Runtime::new()?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
             let report = rt.block_on(run_agent_diagnostics());
 
             for check in &report.checks {
@@ -89,9 +98,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 App::update,
                 App::view,
             )
+            .window(iced::window::Settings {
+                size: iced::Size::new(960.0, 600.0),
+                decorations: false,
+                ..Default::default()
+            })
             .font(FONT_BYTES)
             .default_font(default_font)
-            .decorations(false)
             .scale_factor(App::scale_factor)
             .title("Kuro — Anime")
             .theme(App::theme)
@@ -108,9 +121,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 App::update,
                 App::view,
             )
+            .window(iced::window::Settings {
+                size: iced::Size::new(960.0, 600.0),
+                decorations: false,
+                ..Default::default()
+            })
             .font(FONT_BYTES)
             .default_font(default_font)
-            .decorations(false)
             .scale_factor(App::scale_factor)
             .title("Kuro — Anime")
             .theme(App::theme)
