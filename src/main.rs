@@ -10,13 +10,13 @@ use kuro::agent::{
 use kuro::cli::{Cli, Commands};
 use kuro::gui::App;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
         Some(Commands::Search { query, json }) => {
-            if let Err(e) = execute_search(&query, json).await {
+            let rt = tokio::runtime::Runtime::new()?;
+            if let Err(e) = rt.block_on(execute_search(&query, json)) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -26,7 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             quality,
             json,
         }) => {
-            if let Err(e) = execute_episodes(&show, &quality, json).await {
+            let rt = tokio::runtime::Runtime::new()?;
+            if let Err(e) = rt.block_on(execute_episodes(&show, &quality, json)) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -37,7 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             quality,
             output_dir,
         }) => {
-            if let Err(e) = execute_download(&show, ep, &quality, output_dir).await {
+            let rt = tokio::runtime::Runtime::new()?;
+            if let Err(e) = rt.block_on(execute_download(&show, ep, &quality, output_dir)) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -50,7 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::AgentTest) => {
             println!("Running Kuro Agent Diagnostics Suite...\n");
-            let report = run_agent_diagnostics().await;
+            let rt = tokio::runtime::Runtime::new()?;
+            let report = rt.block_on(run_agent_diagnostics());
 
             for check in &report.checks {
                 let symbol = if check.passed { "✓ PASS" } else { "✗ FAIL" };
